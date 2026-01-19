@@ -1,0 +1,94 @@
+services:
+  # LLM Inference Server (llama.cpp)
+  llama-server:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: pocketllm-llama-server
+    command: >
+      -m /models/phi-3.5-mini-instruct-q4_k_m.gguf
+      --port 8080
+      --host 0.0.0.0
+      -c 4096
+      -t 8
+      --batch-size 512
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '2.5'
+          memory: 12G
+        reservations:
+          cpus: '1'
+          memory: 8G
+    restart: unless-stopped
+    networks:
+      - pocketllm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 0s
+
+  # Backend service (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pocketllm-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/pocketllm.db
+      - LLAMA_SERVER_URL=http://llama-server:8080
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    depends_on:
+      llama-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - pocketllm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend service (React + nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pocketllm-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - pocketllm-network
+
+volumes:
+  backend-data:
+    driver: local
+
+networks:
+  pocketllm-network:
+    driver: bridge
